@@ -167,7 +167,8 @@ Empirical goodness-of-fit comparison codes (e.g., CvM or energy distance statist
 
 # Contact
 
-Fan Li
+Fan Li (lifan@yzu.edu.cn)
+
 College of Hydraulic Science and Engineering, Yangzhou University, China
 
 
