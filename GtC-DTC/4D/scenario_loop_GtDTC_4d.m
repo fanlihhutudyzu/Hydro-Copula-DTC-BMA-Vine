@@ -52,7 +52,7 @@ for sIdx = 1:length(scenarios)
 
         for i = 1:d
             x = data(:,i);
-            bestBIC = Inf;
+            bestAICc = Inf;
             bestFit = [];
             bestFam = '';
             
@@ -72,7 +72,7 @@ for sIdx = 1:length(scenarios)
                             p = 3;
                     end
                     
-                    % Calculate BIC
+                    % Calculate AICc
                     if strcmp(fam, 'GEV')
                         pdfv = gevpdf(x, pd.shape, pd.loc, pd.scale);
                     elseif isstruct(pd) && isfield(pd, 'pdf')
@@ -82,10 +82,11 @@ for sIdx = 1:length(scenarios)
                     end
                     pdfv(pdfv <= 0) = realmin;
                     logL = sum(log(pdfv));
-                    BIC = -2 * logL + p * log(n);
+                    AIC = -2 * logL + 2*p;
+                    AICc = AIC + 2*p*(p+1)/(n-p-1);
                     
-                    if BIC < bestBIC
-                        bestBIC = BIC;
+                    if AICc < bestAICc
+                        bestAICc = AICc;
                         bestFit = pd;
                         bestFam = fam;
                     end
@@ -173,8 +174,8 @@ for sIdx = 1:length(scenarios)
         
         if method_choice == 1
             fprintf('  Selected copula type: %s\n', model_info.chosen_type);
-            fprintf('  Gaussian Copula BIC: %.3f\n', model_info.BIC_Gauss);
-            fprintf('  t Copula BIC: %.3f\n', model_info.BIC_t);
+            fprintf('  Gaussian Copula AICc: %.3f\n', model_info.AICc_Gauss);
+            fprintf('  t Copula AICc: %.3f\n', model_info.AICc_t);
             if strcmp(model_info.chosen_type, 't')
                 fprintf('  t Copula degrees of freedom: %.2f\n', model_info.nu_t);
             end
@@ -346,7 +347,7 @@ function [sim_data, model_info] = gaussian_t_copula_model(U, m)
 R_gauss = copulafit('Gaussian', U);
 ll_gauss = sum(log(copulapdf('Gaussian', U, R_gauss)));
 k_gauss = d*(d-1)/2;
-BIC_Gauss = -2*ll_gauss + k_gauss*log(n);
+AICc_Gauss = -2*ll_gauss + 2*k_gauss + 2*k_gauss*(k_gauss+1)/(n-k_gauss-1);
 
 % Fit t copula
 try
@@ -359,10 +360,10 @@ end
 
 ll_t = sum(log(copulapdf('t', U, R_t, nu_t)));
 k_t = d*(d-1)/2 + 1;
-BIC_t = -2*ll_t + k_t*log(n);
+AICc_t = -2*ll_t + 2*k_t + 2*k_t*(k_t+1)/(n-k_t-1);
 
 % Select best model
-if BIC_t < BIC_Gauss
+if AICc_t < AICc_Gauss
     chosen = 't';
     params = struct('R', R_t, 'nu', nu_t);
 else
@@ -379,7 +380,7 @@ end
 
 sim_data = Usim;
 model_info = struct('R_gauss',R_gauss,'R_t',R_t,'nu_t',nu_t, ...
-    'BIC_Gauss',BIC_Gauss,'BIC_t',BIC_t,'chosen_type',chosen,'chosen_params',params);
+    'AICc_Gauss',AICc_Gauss,'AICc_t',AICc_t,'chosen_type',chosen,'chosen_params',params);
 end
 
 %% Method 2: DTC model
@@ -389,7 +390,7 @@ if d ~= 4
     error('This method is designed for 4-dimensional data (X1,X2,X3,X4) only');
 end
 
-corr_mat = corr(U,'type','Pearson');
+corr_mat = corr(U,'type','Kendall');
 [copula_pairs, var_order] = get_copula_pairs_and_order(corr_mat);
 
 candidate_types = {'Gaussian','t','Frank','Gumbel','Clayton'};
@@ -691,7 +692,7 @@ end
 
 function [best_type, best_params] = fit_pairwise_copula(u_pair, candidate_types)
 n = size(u_pair,1);
-best_BIC = Inf; best_type = ''; best_params = [];
+best_AICc = Inf; best_type = ''; best_params = [];
 for t = 1:length(candidate_types)
     type = candidate_types{t};
     try
@@ -711,9 +712,10 @@ for t = 1:length(candidate_types)
             k = 1;
             params = struct('theta', theta);
         end
-        BIC = -2*ll + k*log(n);
-        if BIC < best_BIC
-            best_BIC = BIC;
+        AIC = -2*ll + 2*k;
+        AICc = AIC + 2*k*(k+1)/(n-k-1);
+        if AICc < best_AICc
+            best_AICc = AICc;
             best_type = type;
             best_params = params;
         end
