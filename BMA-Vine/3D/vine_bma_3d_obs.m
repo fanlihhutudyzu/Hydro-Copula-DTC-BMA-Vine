@@ -1,10 +1,10 @@
 % 3D Observed + Marginal Fitting + Vine Copula + BMA Weighting + Statistical Comparison + Correlation Comparison
 clear; clc; close all; rng(1);
 %% 1. Observed 3D Data 
-% load QZ_Data.mat;
-% data = QZ_Data;
-load LTZ_Data.mat;
-data = LTZ_Data;
+load QZ_Data.mat;
+data = QZ_Data;
+% load LTZ_Data.mat;
+% data = LTZ_Data;
 n = length(data); d = 3;  % 3D variables
 %% 2. Marginal Fitting and Selection
 % 6 distribution functions commonly used in hydrology
@@ -12,7 +12,7 @@ families = {'Gamma','Lognormal','Pearson3','GEV','Weibull','GPD'};
 marg_fits = cell(1,d);
 for i = 1:d
     x = data(:, i);
-    bestBIC = Inf;
+    bestAICc = Inf;
     
     % For simplicity, manually set the threshold for GPD distribution (theta parameter)
     theta_gpd = min(x) - 1; 
@@ -37,7 +37,7 @@ for i = 1:d
                     p = p_gpd; % GPD has 2 free parameters (k, sigma)
             end
             
-            % Calculate log-likelihood and BIC
+            % Calculate log-likelihood and AICc
             if strcmp(fam, 'GEV')
                 pdfv = gevpdf(x, pd(1), pd(2), pd(3));
             elseif strcmp(fam, 'GPD')
@@ -49,11 +49,12 @@ for i = 1:d
             end
             pdfv(pdfv <= 0) = realmin;
             logL = sum(log(pdfv));
-            BIC = -2 * logL + p * log(n);
+            AIC = -2 * logL + 2 * p;
+            AICc = AIC + 2*p*(p+1)/(n - p - 1);
             
             % Update best model
-            if BIC < bestBIC
-                bestBIC = BIC; 
+            if AICc < bestAICc
+                bestAICc = AICc; 
                 bestFit = pd; 
                 bestFam = fam;
                 if strcmp(fam, 'GPD')
@@ -167,14 +168,14 @@ unique_vine_orders = {
 };
 fprintf('Using %d unique Vine structures for 3D case.\n', length(unique_vine_orders));
 vine_models = cell(1, length(unique_vine_orders));
-bestVine.BIC = Inf;
+bestVine.AICc = Inf;
 for i = 1:length(unique_vine_orders)
     ord = unique_vine_orders{i};
     try
         % Use revised Vine fitting function (no longer using numeric handles)
         model = fit_three_dim_vine(Uhat, ord, copula_families);
         vine_models{i} = model;
-        if model.BIC < bestVine.BIC
+        if model.AICc < bestVine.AICc
             bestVine = model;
         end
     catch ME
@@ -194,8 +195,8 @@ for i = 1:length(vine_models)
     tree1_copulas = model.Trees{1}.fams;
     tree2_copulas = model.Trees{2}.fams;
     
-    fprintf('\nVine Structure %d: Order = %s, BIC = %.3f\n', ...
-        valid_model_idx, mat2str(ord), model.BIC);
+    fprintf('\nVine Structure %d: Order = %s, AICc = %.3f\n', ...
+        valid_model_idx, mat2str(ord), model.AICc);
     fprintf('  Tree 1 Copulas:\n');
     fprintf('    - Variable pair (%d, %d): %s\n', ord(1), ord(2), tree1_copulas{1});
     fprintf('    - Variable pair (%d, %d): %s\n', ord(1), ord(3), tree1_copulas{2});
@@ -206,7 +207,7 @@ end
 %% Output best results
 fprintf('\n=== Best Vine structure (from %d unique vines) ===\n', valid_model_idx);
 if isfield(bestVine,'order')
-    fprintf('Order: %s, BIC: %.3f\n', mat2str(bestVine.order), bestVine.BIC);
+    fprintf('Order: %s, AICc: %.3f\n', mat2str(bestVine.order), bestVine.AICc);
     fprintf('Best Vine Copula Details:\n');
     fprintf('  Tree 1 Copulas:\n');
     fprintf('    - Variable pair (%d, %d): %s\n', ...
@@ -224,21 +225,21 @@ num_models = length(valid_vine_models);
 if num_models == 0
     error('No Vine models were successfully fitted for BMA.');
 end
-BICs = zeros(1, num_models);
+AICcs = zeros(1, num_models);
 for k = 1:num_models
-    BICs(k) = valid_vine_models{k}.BIC;
+    AICcs(k) = valid_vine_models{k}.AICc;
 end
-logL_rel = -0.5 * BICs;
+logL_rel = -0.5 * AICcs;
 max_logL_rel = max(logL_rel);
 w_numerator = exp(logL_rel - max_logL_rel);
 w = w_numerator / sum(w_numerator);
 fprintf('\n=== BMA Weights for Each Vine Structure ===\n');
 for k = 1:num_models
     ord = valid_vine_models{k}.order;
-    fprintf('Vine Structure (Order %s): BIC = %.3f, Weight = %.5f\n', ...
-        mat2str(ord), BICs(k), w(k));
+    fprintf('Vine Structure (Order %s): AICc = %.3f, Weight = %.5f\n', ...
+        mat2str(ord), AICcs(k), w(k));
 end
-fprintf('Total BIC Range: [%.3f, %.3f]\n', min(BICs), max(BICs));
+fprintf('Total AICc Range: [%.3f, %.3f]\n', min(AICcs), max(AICcs));
 fprintf('Sum of weights: %.5f\n', sum(w));
 %% 8. Simulation
 Nsim = 1000;
@@ -391,7 +392,12 @@ function model = fit_three_dim_vine(U, order, fams)
     [f23g1, p23g1, logL23, k23] = fit_pair(U2g1, U3g1, fams);
     total_logL = total_logL + logL23;
     total_k = total_k + k23;
-    model.BIC = -2 * total_logL + total_k * log(n);
+
+    % BIC 替换为 AICc
+    AIC = -2 * total_logL + 2 * total_k;
+    AICc = AIC + 2*total_k*(total_k+1)/(n - total_k - 1);
+    model.AICc = AICc;
+
     model.order = order;
     model.Trees{1}.fams = {f12, f13};
     model.Trees{1}.params = {p12, p13};

@@ -1,4 +1,3 @@
-
 clear; clc; close all; rng(1);
 
 % ---------------- top-level settings ----------------
@@ -24,7 +23,7 @@ for s = 1:length(scenarios)
     for i = 1:d
         x = data(:,i);
         families_m = {'Gamma','Lognormal','Weibull','Pearson3','GEV'};
-        bestBIC = Inf; bestFit=[]; bestFam='';
+        bestAICc = Inf; bestFit=[]; bestFam='';
         for fm = families_m
             fam = fm{1};
             try
@@ -38,11 +37,9 @@ for s = 1:length(scenarios)
                     case 'Pearson3'
                         pd = pearson3fit(x); p = 3;
                     case 'GEV'
-                        % gevfit returns [k sigma mu] (shape, scale, loc)
                         parmhat = gevfit(x); p = 3;
-                        pd = parmhat; % treat specially below
+                        pd = parmhat;
                 end
-                % compute pdf values
                 if strcmp(fam,'GEV')
                     pdfv = gevpdf(x, pd(1), pd(2), pd(3));
                 elseif isstruct(pd)
@@ -52,9 +49,10 @@ for s = 1:length(scenarios)
                 end
                 pdfv(pdfv<=0) = realmin;
                 logL = sum(log(pdfv));
-                BIC = -2*logL + p*log(n);
-                if BIC < bestBIC
-                    bestBIC = BIC; bestFit = pd; bestFam = fam;
+                AIC = -2*logL + 2*p;
+                AICc = AIC + 2*p*(p+1)/(n-p-1);
+                if AICc < bestAICc
+                    bestAICc = AICc; bestFit = pd; bestFam = fam;
                 end
             catch
                 continue;
@@ -80,13 +78,13 @@ for s = 1:length(scenarios)
 
     % 4) fit vine for each unique order (use corrected fit)
     vine_models = cell(1,length(unique_vine_orders));
-    bestVine.BIC = Inf;
+    bestVine.AICc = Inf;
     for iord = 1:length(unique_vine_orders)
         ord = unique_vine_orders{iord};
         try
             model = fit_three_dim_vine_correct(Uhat, ord, families);
             vine_models{iord} = model;
-            if model.BIC < bestVine.BIC
+            if model.AICc < bestVine.AICc
                 bestVine = model;
             end
         catch ME
@@ -102,9 +100,9 @@ for s = 1:length(scenarios)
     for k = 1:length(vine_models)
         model = vine_models{k};
         if isempty(model) || ~isfield(model,'order'), continue; end
-        valid_models{end+1} = model; %#ok<SAGROW>
+        valid_models{end+1} = model;
         ord = model.order;
-        fprintf('\nVine Structure %d: Order = %s, BIC = %.3f\n', k, mat2str(ord), model.BIC);
+        fprintf('\nVine Structure %d: Order = %s, AICc = %.3f\n', k, mat2str(ord), model.AICc);
         t1f = model.Trees{1}.fams;
         t2f = model.Trees{2}.fams;
         fprintf('  Tree 1 Copulas:\n');
@@ -117,7 +115,7 @@ for s = 1:length(scenarios)
     % best vine
     fprintf('\n=== Best Vine structure (from %d unique vines) ===\n', length(valid_models));
     if isfield(bestVine,'order')
-        fprintf('Order: %s, BIC: %.3f\n', mat2str(bestVine.order), bestVine.BIC);
+        fprintf('Order: %s, AICc: %.3f\n', mat2str(bestVine.order), bestVine.AICc);
         fprintf('Best Vine Copula Details:\n');
         fprintf('  Tree 1 Copulas:\n');
         fprintf('    - Variable pair (%d, %d): %s\n', bestVine.order(1), bestVine.order(2), bestVine.Trees{1}.fams{1});
@@ -129,15 +127,15 @@ for s = 1:length(scenarios)
         continue;
     end
 
-    % 5) BMA weights based on BIC
+    % 5) BMA weights based on AICc
     valid_vine_models = vine_models(~cellfun('isempty',vine_models));
     num_models = length(valid_vine_models);
     if num_models == 0
         fprintf('No models for BMA\n'); continue;
     end
-    BICs = zeros(1,num_models);
-    for k = 1:num_models, BICs(k)=valid_vine_models{k}.BIC; end
-    logL_rel = -0.5 * BICs;
+    AICcs = zeros(1,num_models);
+    for k = 1:num_models, AICcs(k)=valid_vine_models{k}.AICc; end
+    logL_rel = -0.5 * AICcs;
     max_logL_rel = max(logL_rel);
     w_numer = exp(logL_rel - max_logL_rel);
     w = w_numer / sum(w_numer);
@@ -145,9 +143,9 @@ for s = 1:length(scenarios)
     fprintf('\n=== BMA Weights for Each Vine Structure ===\n');
     for k = 1:num_models
         ord = valid_vine_models{k}.order;
-        fprintf('Vine Structure (Order %s): BIC = %.3f, Weight = %.5f\n', mat2str(ord), BICs(k), w(k));
+        fprintf('Vine Structure (Order %s): AICc = %.3f, Weight = %.5f\n', mat2str(ord), AICcs(k), w(k));
     end
-    fprintf('Total BIC Range: [%.3f, %.3f]\n', min(BICs), max(BICs));
+    fprintf('Total AICc Range: [%.3f, %.3f]\n', min(AICcs), max(AICcs));
     fprintf('Sum of weights: %.5f\n', sum(w));
 
     % 6) simulation using BMA
@@ -157,7 +155,7 @@ for s = 1:length(scenarios)
         if Nk > 0
             model = valid_vine_models{k};
             simk = simulate_three_dim_vine_correct(Nk, model);
-            simBMA = [simBMA; simk]; %#ok<AGROW>
+            simBMA = [simBMA; simk];
         end
     end
     Nsim_actual = size(simBMA,1);
@@ -210,8 +208,6 @@ end
 % ---------------- end of main script ----------------
 % ---------- helper functions (placed below) ------------
 
-
-
 %%%--------------- Pearson3 fit ----------------
 function pd = pearson3fit(x)
     m = mean(x); s = std(x); g1 = skewness(x);
@@ -244,7 +240,12 @@ function model = fit_three_dim_vine_correct(U, order, fams)
     [f23g1, p23g1, logL23, k23] = fit_pair_correct(U2g1, U3g1, fams);
     total_logL = total_logL + logL23;
     total_k = total_k + k23;
-    model.BIC = -2 * total_logL + total_k * log(n);
+
+    % BIC -> AICc
+    AIC = -2 * total_logL + 2 * total_k;
+    AICc = AIC + 2*total_k*(total_k+1)/(n - total_k - 1);
+    model.AICc = AICc;
+
     model.order = order;
     model.Trees{1}.fams = {f12, f13};
     model.Trees{1}.params = {p12, p13};
@@ -385,20 +386,11 @@ function U_sim = simulate_three_dim_vine_correct(N, model)
     f13 = Trees{1}.fams{2}; p13 = Trees{1}.params{2};
     f23g1 = Trees{2}.fams{1}; p23g1 = Trees{2}.params{1};
 
-    % draw u1
     u1 = S(:,1); U_sim_ordered(:,1) = u1;
-
-    % draw u2 such that C_{2|1}(u2|u1) = S(:,2)
     u2 = inv_cond_cdf(f12, p12, S(:,2), u1, 'second');
     U_sim_ordered(:,2) = u2;
-
-    % compute u2g1 = C_{2|1}(u2|u1)
     u2g1 = cond_cdf(f12, p12, u1, u2);
-
-    % find u3g1 such that C_{23|1}(u2g1, u3g1) = S(:,3)
     u3g1 = inv_cond_cdf(f23g1, p23g1, S(:,3), u2g1, 'second');
-
-    % recover u3 from u3g1 by solving C_{3|1}(u3|u1) = u3g1
     u3 = inv_cond_cdf(f13, p13, u3g1, u1, 'second');
     U_sim_ordered(:,3) = u3;
 
