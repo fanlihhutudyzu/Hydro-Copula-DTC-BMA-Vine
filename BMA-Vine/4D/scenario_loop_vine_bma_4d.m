@@ -32,18 +32,18 @@ for sIdx = 1:length(scenarios)
         %% 1) Generate 1000x4 synthetic samples
         data = generate_scenario_data(scen, n); % Returns n x 4
         
-        %% 2) Marginal fitting (BIC selection) & K-S test & Pseudo-observations Uhat
+        %% 2) Marginal fitting (AICc selection) & K-S test & Pseudo-observations Uhat
         marg_fits = cell(1,d);
         KS_pvals = nan(1,d);
         KS_results = cell(1,d);  % Store test results
         Uhat = zeros(n,d);
         for i = 1:d
             x = data(:,i);
-            bestBIC = Inf;
+            bestAICc = Inf;
             bestFit = [];
             bestFam = '';
             
-            % Fit all candidate distributions and select the optimal BIC model
+            % Fit all candidate distributions and select the optimal AICc model
             for f = marg_families
                 fam = f{1};
                 try
@@ -60,7 +60,7 @@ for sIdx = 1:length(scenarios)
                             p = 3;
                     end
                     
-                    % Calculate BIC
+                    % Calculate AICc
                     if strcmp(fam, 'GEV')
                         pdfv = gevpdf(x, pd.shape, pd.loc, pd.scale);
                     elseif isstruct(pd) && isfield(pd, 'pdf')
@@ -70,11 +70,12 @@ for sIdx = 1:length(scenarios)
                     end
                     pdfv(pdfv <= 0) = realmin;
                     logL = sum(log(pdfv));
-                    BIC = -2 * logL + p * log(n);
+                    AIC = -2 * logL + 2 * p;
+                    AICc = AIC + 2*p*(p+1)/(n - p - 1);
                     
                     % Update optimal model
-                    if BIC < bestBIC
-                        bestBIC = BIC;
+                    if AICc < bestAICc
+                        bestAICc = AICc;
                         bestFit = pd;
                         bestFam = fam;
                     end
@@ -161,7 +162,7 @@ for sIdx = 1:length(scenarios)
         %% 4) Fit all unique C-vines and D-vines
         unique_C_models = cell(1, length(unique_C_orders));
         unique_D_models = cell(1, length(unique_D_orders));
-        bestC.BIC = Inf; bestD.BIC = Inf;
+        bestC.AICc = Inf; bestD.AICc = Inf;
         % Fit C-vines
         for ii = 1:length(unique_C_orders)
             ord = unique_C_orders{ii};
@@ -169,7 +170,7 @@ for sIdx = 1:length(scenarios)
                 modelC = fit_four_dim_cvine(Uhat, ord, copula_families);
                 modelC.type = 'C';
                 unique_C_models{ii} = modelC;
-                if isfield(modelC,'BIC') && modelC.BIC < bestC.BIC
+                if isfield(modelC,'AICc') && modelC.AICc < bestC.AICc
                     bestC = modelC;
                 end
             catch
@@ -183,7 +184,7 @@ for sIdx = 1:length(scenarios)
                 modelD = fit_four_dim_dvine(Uhat, ord, copula_families);
                 modelD.type = 'D';
                 unique_D_models{ii} = modelD;
-                if isfield(modelD,'BIC') && modelD.BIC < bestD.BIC
+                if isfield(modelD,'AICc') && modelD.AICc < bestD.AICc
                     bestD = modelD;
                 end
             catch
@@ -193,13 +194,13 @@ for sIdx = 1:length(scenarios)
         
         % Merge models and collect available model information
         all_models = [unique_C_models, unique_D_models];
-        model_info = struct('type', {}, 'order', {}, 'BIC', {}, 'model', {});
+        model_info = struct('type', {}, 'order', {}, 'AICc', {}, 'model', {});
         for k = 1:length(all_models)
             mm = all_models{k};
-            if ~isempty(mm) && isfield(mm,'BIC')
+            if ~isempty(mm) && isfield(mm,'AICc')
                 model_info(end+1).type = mm.type;             
                 model_info(end).order = mm.order;
-                model_info(end).BIC = mm.BIC;
+                model_info(end).AICc = mm.AICc;
                 model_info(end).model = mm;
             end
         end
@@ -208,8 +209,8 @@ for sIdx = 1:length(scenarios)
             error('No Vine models were successfully fitted');
         end
         
-        % Extract BIC list and orders/types
-        allBICs = [model_info.BIC];
+        % Extract AICc list and orders/types
+        allAICcs = [model_info.AICc];
         allOrders = cellfun(@(o) sprintf('%d-', o{:}), arrayfun(@(m) {m.order}, model_info, 'UniformOutput', false), 'UniformOutput', false);
         % Construct strings
         AllOrders_strs = cell(1,Num_Valid_Models);
@@ -221,35 +222,35 @@ for sIdx = 1:length(scenarios)
             AllTypes{ii} = model_info(ii).type;
         end
         
-        % Calculate BMA weights (based on BIC) - Complete the definition of allW
-        logL_rel = -0.5 * allBICs;
+        % Calculate BMA weights (based on AICc) - Complete the definition of allW
+        logL_rel = -0.5 * allAICcs;
         logL_rel = logL_rel - max(logL_rel); % Stabilization
         w_num = exp(logL_rel);
         allW = w_num / sum(w_num);  % Define allW here
         
         % Find the best C and D (if they exist)
         bestC_order_str = 'N/A'; bestD_order_str = 'N/A';
-        BIC_bestC = NaN; BIC_bestD = NaN;
+        AICc_bestC = NaN; AICc_bestD = NaN;
         C_idxs = find(strcmp({model_info.type}, 'C'));
         D_idxs = find(strcmp({model_info.type}, 'D'));
         if ~isempty(C_idxs)
-            [BIC_bestC, posC] = min(allBICs(C_idxs));
+            [AICc_bestC, posC] = min(allAICcs(C_idxs));
             bestC_info = model_info(C_idxs(posC));
             bestC_order_str = sprintf('%d-%d-%d-%d', bestC_info.order);
         end
         if ~isempty(D_idxs)
-            [BIC_bestD, posD] = min(allBICs(D_idxs));
+            [AICc_bestD, posD] = min(allAICcs(D_idxs));
             bestD_info = model_info(D_idxs(posD));
             bestD_order_str = sprintf('%d-%d-%d-%d', bestD_info.order);
         end
         
-        % Overall best model (by BIC)
-        [minBIC, minPos] = min(allBICs);
+        % Overall best model (by AICc)
+        [minAICc, minPos] = min(allAICcs);
         BestModelType = model_info(minPos).type;
         BestOrder_str = sprintf('%d-%d-%d-%d', model_info(minPos).order);
         
         % Result string concatenation
-        AllBICs_str = strjoin(arrayfun(@(v) sprintf('%.2f',v), allBICs, 'UniformOutput', false), ';');
+        AllAICcs_str = strjoin(arrayfun(@(v) sprintf('%.2f',v), allAICcs, 'UniformOutput', false), ';');
         AllW_str   = strjoin(arrayfun(@(v) sprintf('%.4f',v), allW, 'UniformOutput', false), ';');
         AllOrders_str = strjoin(AllOrders_strs, ';');
         AllTypes_str  = strjoin(AllTypes, ';');
@@ -305,12 +306,12 @@ for sIdx = 1:length(scenarios)
         
         %% 6) Display results
         fprintf('Scenario %s results:\n', scen);
-        fprintf('  Best overall model: %s (order %s) with BIC=%.3f\n', BestModelType, BestOrder_str, minBIC);
+        fprintf('  Best overall model: %s (order %s) with AICc=%.3f\n', BestModelType, BestOrder_str, minAICc);
         fprintf('  Best C-vine: %s  Best D-vine: %s\n', bestC_order_str, bestD_order_str);
         fprintf('  Num valid vine models: %d\n', Num_Valid_Models);
         fprintf('  All orders: %s\n', AllOrders_str);
         fprintf('  All types : %s\n', AllTypes_str);
-        fprintf('  All BICs  : %s\n', AllBICs_str);
+        fprintf('  All AICcs  : %s\n', AllAICcs_str);
         fprintf('  All weights: %s\n', AllW_str);
         fprintf('  Marginal KS test results: %s\n', KS_results_str);
         fprintf('  Marginal KS p-values: %s\n', KS_pvals_str);
@@ -411,3 +412,4 @@ set(groot, 'DefaultAxesFontSize', 10);
 set(groot, 'DefaultTextFontName', 'Helvetica');
 set(groot, 'DefaultTextFontSize', 10);
 set(groot, 'DefaultLegendFontSize', 9);
+

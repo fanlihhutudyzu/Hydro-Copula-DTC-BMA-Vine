@@ -1,18 +1,18 @@
-%% vine_bma_4d_obs.m
+%% vine_bma_4d_obs_AICc.m
 % 4D observed data + Marginal fitting (including GPD) + C/D vine + BMA weighting + Statistical comparison + Correlation comparison
 clear; clc; close all; rng(1);
 %% 1. Input Data
-% load('Storm_NL_4D.mat')
-% data = storm_NL_4D;
-load preci_yangzhou.mat;
-data = preci_yangzhou;
+load('Storm_NL_4D.mat')
+data = storm_NL_4D;
+% load preci_yangzhou.mat;
+% data = preci_yangzhou;
 n = length(data);
 d = 4;
 %% 2. Marginal Fitting and Selection
 families = {'Gamma','Lognormal','Pearson3','GEV','Weibull','GPD'};
 for i=1:d
     x = data(:,i);
-    bestBIC = Inf;
+    bestAICc = Inf;  % 修改：bestBIC → bestAICc
     bestFit_theta_gpd = NaN;
     theta_gpd = min(x) - 1; 
     for f = families
@@ -46,10 +46,13 @@ for i=1:d
             end
             pdfv(pdfv<=0) = realmin;
             logL = sum(log(pdfv));
-            BIC = -2*logL + p*log(n);
             
-            if BIC < bestBIC
-                bestBIC = BIC; 
+            % ===================== 修改：BIC → AICc 公式 =====================
+            AIC = -2*logL + 2*p;
+            AICc = AIC + 2*p*(p+1)/(n - p - 1);
+            
+            if AICc < bestAICc
+                bestAICc = AICc; 
                 bestFit = pd; 
                 bestFam = fam;
                 if strcmp(fam, 'GPD')
@@ -137,30 +140,33 @@ end
 % Fit C/D vine models
 unique_C_models = cell(1,length(unique_C_orders));
 unique_D_models = cell(1,length(unique_D_orders));
-bestC.BIC = Inf; bestD.BIC = Inf;
+bestC.AICc = Inf; bestD.AICc = Inf;  % 修改：BIC → AICc
 for i=1:length(unique_C_orders)
     ord = unique_C_orders{i};
-    try modelC = fit_four_dim_cvine(Uhat, ord, copula_families); modelC.type='C'; unique_C_models{i}=modelC; if modelC.BIC<bestC.BIC, bestC=modelC; end
+    try modelC = fit_four_dim_cvine(Uhat, ord, copula_families); modelC.type='C'; unique_C_models{i}=modelC; if modelC.AICc<bestC.AICc, bestC=modelC; end  % 修改
     catch, continue; end
 end
 for i=1:length(unique_D_orders)
     ord = unique_D_orders{i};
-    try modelD = fit_four_dim_dvine(Uhat, ord, copula_families); modelD.type='D'; unique_D_models{i}=modelD; if modelD.BIC<bestD.BIC, bestD=modelD; end
+    try modelD = fit_four_dim_dvine(Uhat, ord, copula_families); modelD.type='D'; unique_D_models{i}=modelD; if modelD.AICc<bestD.AICc, bestD=modelD; end  % 修改
     catch, continue; end
 end
 all_models = [unique_C_models, unique_D_models];
 %% 7. BMA Weights
 num_models = length(all_models);
 if num_models==0, error('No unique C-vine or D-vine models were successfully fitted for BMA.'); end
-BICs=zeros(1,num_models);
-for k=1:num_models, BICs(k)=all_models{k}.BIC; end
-logL_rel=-0.5*BICs; max_logL_rel=max(logL_rel); w_numerator=exp(logL_rel-max_logL_rel); w=w_numerator/sum(w_numerator);
+
+AICcs = zeros(1,num_models);  % 修改：BICs → AICcs
+for k=1:num_models, AICcs(k)=all_models{k}.AICc; end  % 修改
+
+logL_rel=-0.5*AICcs; max_logL_rel=max(logL_rel); w_numerator=exp(logL_rel-max_logL_rel); w=w_numerator/sum(w_numerator);  % 修改
+
 %% Display all model weights, orders, and types
 fprintf('\n=== All BMA Model Details (Total %d Models) ===\n', num_models);
 for k = 1:num_models
     mdl = all_models{k};
-    fprintf('Model %2d: type=%s, order=%s, BIC=%.3f, Weight=%.5f\n', ...
-        k, mdl.type, mat2str(mdl.order), BICs(k), w(k));
+    fprintf('Model %2d: type=%s, order=%s, AICc=%.3f, Weight=%.5f\n', ...  % 修改
+        k, mdl.type, mat2str(mdl.order), AICcs(k), w(k));  % 修改
 end
 %% 8. Simulation
 Nsim=1000; simBMA=[];
@@ -251,66 +257,50 @@ set(groot, 'DefaultAxesFontSize', 10);          % Default axes font size
 set(groot, 'DefaultTextFontName', 'Helvetica'); % Default text font
 % GPD distribution fitting function (k, sigma, theta)
 function [param_gpd, p_gpd] = gpdfit(x, theta)
-    % Extract data exceeding threshold (GPD fits only the exceedance)
     x_exceed = x(x > theta);
-    
     if isempty(x_exceed)
         error('No data exceeds the GPD threshold. Adjust theta.');
     end
-    
-    % Fit GPD shape parameter k and scale parameter sigma
-    param_hat = gpfit(x_exceed - theta);  % Fit exceedance x - theta
-    
-    % param_hat = [k, sigma], combined as [k, sigma, theta]
+    param_hat = gpfit(x_exceed - theta);
     k_hat = param_hat(1);
     sigma_hat = param_hat(2);
     param_gpd = [k_hat, sigma_hat, theta]; 
-    
-    p_gpd = 2;  % GPD has 2 estimated parameters (k and sigma)
+    p_gpd = 2;
 end
 % GPD distribution PDF function
 function y = gpdpdf(x, k, sigma, theta)
-    x_exceed = x - theta;  % Calculate exceedance
-    y = zeros(size(x));    % Initialize PDF result
-    
-    % Calculate PDF only for positive exceedance
+    x_exceed = x - theta;
+    y = zeros(size(x));
     idx = x_exceed > 0;
-    
-    if k == 0  % Special case: degenerate into exponential distribution when k=0
+    if k == 0
         y(idx) = (1/sigma) * exp(-x_exceed(idx) / sigma);
-    else  % General case
+    else
         factor = 1 + k * x_exceed(idx) / sigma;
-        valid_idx = idx & (factor > 0);  % Ensure factor is positive
+        valid_idx = idx & (factor > 0);
         y(valid_idx) = (1/sigma) * (factor(valid_idx)).^(-1/k - 1);
     end
 end
 % GPD distribution CDF function
 function F = gpdcdf(x, k, sigma, theta)
-    x_exceed = x - theta;  % Calculate exceedance
-    F = zeros(size(x));    % Initialize CDF result
-    
-    % Calculate CDF only for positive exceedance
+    x_exceed = x - theta;
+    F = zeros(size(x));
     idx = x_exceed > 0;
-    
-    if k == 0  % Exponential distribution case
+    if k == 0
         F(idx) = 1 - exp(-x_exceed(idx) / sigma);
-    else  % General case
+    else
         factor = 1 + k * x_exceed(idx) / sigma;
-        valid_idx = idx & (factor > 0);  % Validity constraint
+        valid_idx = idx & (factor > 0);
         F(valid_idx) = 1 - (factor(valid_idx)).^(-1/k);
     end
-    F = max(0, min(1, F));  % Ensure CDF is within [0,1]
+    F = max(0, min(1, F));
 end
 % GPD distribution quantile function (ICDF)
 function x = gpdinv(p, k, sigma, theta)
-    x = zeros(size(p));  % Initialize quantile result
-    
-    % Calculate quantile only for valid probability range
+    x = zeros(size(p));
     idx = p > 0 & p < 1;
-    
-    if k == 0  % Exponential distribution case
+    if k == 0
         x(idx) = theta - sigma * log(1 - p(idx));
-    else  % General case
+    else
         x(idx) = theta + (sigma / k) * ( (1 - p(idx)).^(-k) - 1 );
     end
 end
