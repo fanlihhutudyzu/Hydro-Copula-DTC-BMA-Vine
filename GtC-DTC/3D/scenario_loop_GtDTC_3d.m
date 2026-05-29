@@ -1,23 +1,19 @@
 % 3D Multi-scenario Copula Analysis: Synthetic Data from Three Scenarios + Marginal Fitting + Multiple Simulation Methods + Statistical Comparison
 clear; clc; close all; 
-% rng(1);
-
+rng(1);
 % Allow user to select simulation method
 fprintf('Please select a simulation method:\n');
 fprintf('1. Gaussian/t Copula 3D Simulation\n');
 fprintf('2. DTC 3D Simulation\n');
 method_choice = input('Enter your choice (1 or 2): ');
-
 % Validate user input
 while method_choice ~= 1 && method_choice ~= 2
     fprintf('Invalid selection, please try again!\n');
     method_choice = input('Enter your choice (1 or 2): ');
 end
-
 % Define scenarios to analyze
 scenarios = {'A', 'B', 'C'};
 n = 1000;  % Sample size
-
 % Loop through each scenario
 for s = 1:length(scenarios)
     scenario = scenarios{s};
@@ -29,13 +25,13 @@ for s = 1:length(scenarios)
     data = generate_scenario_3Ddata(scenario, n);
     d = size(data, 2);  % Dimension fixed at 3
     
-    %% 2. Marginal Fitting and Selection
+    %% 2. Marginal Fitting and Selection (AICc instead of BIC)
     % 5 common distribution functions in hydrology
     families = {'Gamma','Lognormal','Pearson3','GEV','Weibull'};
     marg_fits = cell(1,d); % Pre-allocate cell array
     for i = 1:d
         x = data(:, i);
-        bestBIC = Inf;
+        bestAICc = Inf;
         for f = families
             fam = f{1};
             try
@@ -51,7 +47,7 @@ for s = 1:length(scenarios)
                     case 'GEV'
                         pd = gevfit(x); p = 3;  % GEV parameter estimation
                 end
-                % Calculate log-likelihood and BIC
+                % Calculate log-likelihood and AICc
                 if strcmp(fam, 'GEV')
                     pdfv = gevpdf(x, pd(1), pd(2), pd(3));
                 elseif isstruct(pd)
@@ -61,10 +57,12 @@ for s = 1:length(scenarios)
                 end
                 pdfv(pdfv <= 0) = realmin;
                 logL = sum(log(pdfv));
-                BIC = -2 * logL + p * log(n);
+                AIC = -2 * logL + 2*p;
+                AICc = AIC + 2*p*(p+1)/(n-p-1);
+                
                 % Update best model
-                if BIC < bestBIC
-                    bestBIC = BIC; 
+                if AICc < bestAICc
+                    bestAICc = AICc; 
                     bestFit = pd; 
                     bestFam = fam;
                 end
@@ -156,7 +154,7 @@ for s = 1:length(scenarios)
     fprintf('Simulation Model Info:\n');
     if method_choice == 1
         fprintf('Chosen Copula Type: %s\n', model_info.chosen_type);
-        fprintf('Gaussian BIC: %.3f, t Copula BIC: %.3f\n', model_info.BIC_Gauss, model_info.BIC_t);
+        fprintf('Gaussian AICc: %.3f, t Copula AICc: %.3f\n', model_info.AICc_Gauss, model_info.AICc_t);
     else
         fprintf('Central Node: %d\n', model_info.mid_node);
         fprintf('Optimum Copula Pair 1: %s\n', model_info.opt_types{1});
@@ -214,7 +212,7 @@ for s = 1:length(scenarios)
         
         hold on;
         % Simulated scatter (translucent orange)
-        scatter(sim_data(:, i), sim_data(:, j), 30, simulated_color, 'filled', ...
+        scatter(sim_data(:, i), data(:, j), 30, simulated_color, 'filled', ...
             'MarkerEdgeColor', 'none', ...
             'MarkerFaceAlpha', alpha_val);
         
@@ -230,14 +228,13 @@ for s = 1:length(scenarios)
     end
     sgtitle(sprintf('Scenario %s: Original vs Simulated', scenario), 'FontSize', 14, 'FontWeight', 'bold');
 end
-
 % Reset graphics default settings
 set(groot, 'DefaultLineLineWidth', 0.5);
 set(groot, 'DefaultAxesFontName', 'Helvetica');
 set(groot, 'DefaultAxesFontSize', 10);
 set(groot, 'DefaultTextFontName', 'Helvetica');
 
-%% ===================== Core Method 1: Gaussian/t Copula 3D Simulation =====================
+%% ===================== Core Method 1: Gaussian/t Copula 3D Simulation (AICc) =====================
 function [sim_U, model_info] = gaussian_t_copula_3d_model(Uhat, Nsim)
     [n, d] = size(Uhat);
     if d ~= 3
@@ -246,10 +243,12 @@ function [sim_U, model_info] = gaussian_t_copula_3d_model(Uhat, Nsim)
     if ~(isnumeric(Nsim) && mod(Nsim,1)==0 && Nsim>0)
         error('Nsim must be a positive integer, current value: %s', num2str(Nsim));
     end
+    
     R_gauss = copulafit('Gaussian', Uhat);
     ll_gauss = sum(log(copulapdf('Gaussian', Uhat, R_gauss)));
     k_gauss = d*(d-1)/2;
-    BIC_Gauss = -2*ll_gauss + k_gauss*log(n);
+    AICc_Gauss = -2*ll_gauss + 2*k_gauss + 2*k_gauss*(k_gauss+1)/(n-k_gauss-1);
+    
     try
         [R_t, nu_t] = copulafit('t', Uhat);
     catch ME
@@ -259,27 +258,30 @@ function [sim_U, model_info] = gaussian_t_copula_3d_model(Uhat, Nsim)
     end
     ll_t = sum(log(copulapdf('t', Uhat, R_t, nu_t)));
     k_t = d*(d-1)/2 + 1;
-    BIC_t = -2*ll_t + k_t*log(n);
-    if BIC_t < BIC_Gauss
+    AICc_t = -2*ll_t + 2*k_t + 2*k_t*(k_t+1)/(n-k_t-1);
+    
+    if AICc_t < AICc_Gauss
         chosen_type = 't';
         chosen_params = struct('R', R_t, 'nu', nu_t);
     else
         chosen_type = 'Gaussian';
         chosen_params = struct('R', R_gauss);
     end
+    
     if strcmp(chosen_type, 't')
         sim_U = copularnd('t', chosen_params.R, chosen_params.nu, Nsim);
     else
         sim_U = copularnd('Gaussian', chosen_params.R, Nsim);
     end
+    
     model_info = struct(...
         'R_gauss', R_gauss, 'R_t', R_t, 'nu_t', nu_t,...
-        'BIC_Gauss', BIC_Gauss, 'BIC_t', BIC_t,...
+        'AICc_Gauss', AICc_Gauss, 'AICc_t', AICc_t,...
         'chosen_type', chosen_type, 'chosen_params', chosen_params...
     );
 end
 
-%% ===================== Core Method 2: DTC 3D Simulation =====================
+%% ===================== Core Method 2: DTC 3D Simulation (AICc) =====================
 function [sim_U, model_info] = DTC_3d_model(Uhat, Nsim)
     [n, d] = size(Uhat);
     if d ~= 3
@@ -288,7 +290,8 @@ function [sim_U, model_info] = DTC_3d_model(Uhat, Nsim)
     if ~(isnumeric(Nsim) && mod(Nsim,1)==0 && Nsim>0)
         error('Nsim must be a positive integer, current value: %s', num2str(Nsim));
     end
-    corr_mat = corr(Uhat, 'type', 'Pearson');
+    
+    corr_mat = corr(Uhat, 'type', 'Kendall');
     abs_corr = abs(corr_mat);
     abs_corr(1:d+1:end) = 0;
     pairs = [[1,2]; [1,3]; [2,3]];
@@ -312,41 +315,43 @@ function [sim_U, model_info] = DTC_3d_model(Uhat, Nsim)
         sort([mid_node, other_vars(1)]);
         sort([mid_node, other_vars(2)])
     ];
+    
     candidate_types = {'Gaussian', 't', 'Frank', 'Gumbel', 'Clayton'};
     num_pairs = size(copula_pairs,1);
     opt_types = cell(1, num_pairs);
     opt_params = cell(1, num_pairs);
     for k = 1:num_pairs
         pair_idx = copula_pairs(k,:);
-        upair = Uhat(:, pair_idx);    % Column order matches copula_pairs (already sorted)
+        upair = Uhat(:, pair_idx);
         [best_type, best_params] = fit_pairwise_copula(upair, candidate_types);
         opt_types{k} = best_type;
         opt_params{k} = best_params;
     end
+    
     % Sampling
     sim_U = zeros(Nsim, d);
     for i = 1:Nsim
         s = rand(1,3);
         u_current = zeros(1,d);
-        % Center node
         u_current(mid_node) = s(1);
-        % First non-center node
+        
         pair1 = copula_pairs(1,:);
         typ1 = opt_types{1}; params1 = opt_params{1};
         u_cond1 = u_current(mid_node); w1 = s(2);
-        % Get position index (1 or 2) and pass pair index
         pos1 = find(pair1==mid_node,1);
         v_j = hinv_conditional(typ1, params1, u_cond1, w1, pos1, pair1);
         u_current(other_vars(1)) = min(max(v_j, 1e-12), 1-1e-12);
-        % Second non-center node
+        
         pair2 = copula_pairs(2,:);
         typ2 = opt_types{2}; params2 = opt_params{2};
         u_cond2 = u_current(mid_node); w2 = s(3);
         pos2 = find(pair2==mid_node,1);
         v_k = hinv_conditional(typ2, params2, u_cond2, w2, pos2, pair2);
         u_current(other_vars(2)) = min(max(v_k, 1e-12), 1-1e-12);
+        
         sim_U(i,:) = u_current;
     end
+    
     model_info = struct(...
         'corr_mat', corr_mat, 'mid_node', mid_node,...
         'copula_pairs', copula_pairs, 'opt_types', {opt_types},...
@@ -354,10 +359,10 @@ function [sim_U, model_info] = DTC_3d_model(Uhat, Nsim)
     );
 end
 
-%% ===================== Helper Function 1: Pairwise Copula Fitting (BIC Selection) =====================
+%% ===================== Helper Function 1: Pairwise Copula Fitting (AICc Selection) =====================
 function [best_type, best_params] = fit_pairwise_copula(u_pair, candidate_types)
     n = size(u_pair,1);
-    best_BIC = Inf; best_type = ''; best_params = [];
+    best_AICc = Inf; best_type = ''; best_params = [];
     for t = 1:length(candidate_types)
         type = candidate_types{t};
         try
@@ -378,9 +383,11 @@ function [best_type, best_params] = fit_pairwise_copula(u_pair, candidate_types)
                     k = 1;
                     params = struct('theta', theta);
             end
-            BIC = -2*ll + k*log(n);
-            if BIC < best_BIC
-                best_BIC = BIC; best_type = type; best_params = params;
+            AIC = -2*ll + 2*k;
+            AICc = AIC + 2*k*(k+1)/(n-k-1);
+            
+            if AICc < best_AICc
+                best_AICc = AICc; best_type = type; best_params = params;
             end
         catch ME
             warning('Fitting %s Copula failed: %s, skipping', type, ME.message);
@@ -395,7 +402,6 @@ end
 
 %% ===================== Helper Function 2: Inverse Conditional Copula Distribution =====================
 function v = hinv_conditional(type, params, u_cond, w, idx_in_pair_cond, pair)
-    % idx_in_pair_cond: 1 or 2, representing the position of the conditional variable in the pair
     if idx_in_pair_cond == 1
         switch lower(type)
             case 'gaussian'

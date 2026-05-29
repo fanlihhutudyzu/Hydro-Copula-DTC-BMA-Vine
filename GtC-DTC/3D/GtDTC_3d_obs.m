@@ -13,7 +13,7 @@ families = {'Gamma','Lognormal','Pearson3','GEV','Weibull','GPD'};
 marg_fits = cell(1,d);
 for i = 1:d
     x = data(:, i);
-    bestBIC = Inf;
+    bestAICc = Inf;
     
     % Manually set GPD threshold (theta parameter) to simplify calculation
     theta_gpd = min(x) - 1; 
@@ -38,7 +38,7 @@ for i = 1:d
                     p = p_gpd; % GPD has 2 free parameters (k, sigma)
             end
             
-            % Calculate log-likelihood and BIC
+            % Calculate log-likelihood and AICc
             if strcmp(fam, 'GEV')
                 pdfv = gevpdf(x, pd(1), pd(2), pd(3));
             elseif strcmp(fam, 'GPD')
@@ -50,11 +50,12 @@ for i = 1:d
             end
             pdfv(pdfv <= 0) = realmin;
             logL = sum(log(pdfv));
-            BIC = -2 * logL + p * log(n);
+            AIC = -2 * logL + 2*p;
+            AICc = AIC + 2*p*(p+1)/(n-p-1);
             
             % Update best model
-            if BIC < bestBIC
-                bestBIC = BIC; 
+            if AICc < bestAICc
+                bestAICc = AICc; 
                 bestFit = pd; 
                 bestFam = fam;
                 if strcmp(fam, 'GPD')
@@ -116,11 +117,14 @@ fprintf('\n--- Original Empirical Distribution Correlation Matrix ---\n');
 disp(Rtrue);
 sample_corr = corr(data);
 %% 4. Marginal Distribution Diagnostics: QQ Plots and Goodness-of-Fit
-set(groot, 'DefaultLineLineWidth', 1.2);
+set(groot, 'DefaultLineLineWidth', 1.5); % 加粗线条
 set(groot, 'DefaultAxesFontName', 'Times New Roman');
-set(groot, 'DefaultAxesFontSize', 10);
+set(groot, 'DefaultAxesFontSize', 14);   % 全局增大坐标轴字体
 set(groot, 'DefaultTextFontName', 'Times New Roman');
-figure('Name', 'Marginal Distribution QQ Plots', 'Position', [100 100 1200 400]);
+set(groot, 'DefaultTextFontSize', 14);   % 全局增大文本字体
+% 真实变量名称
+var_names = {'Q (m^3/s)','V (10^8m^3)','D (h)'};
+figure('Name', 'Marginal Distribution QQ Plots', 'Position', [100 100 1300 450]); % 增大画布
 for i = 1:d
     subplot(1, 3, i);
     x = data(:, i);
@@ -140,33 +144,34 @@ for i = 1:d
     end
     q_emp = sort(x);
     
-    plot(q_theo, q_emp, 'o', 'MarkerSize', 4, ...
+    plot(q_theo, q_emp, 'o', 'MarkerSize', 5, ...
         'MarkerEdgeColor', [0.2 0.2 0.8], 'MarkerFaceColor', [0.7 0.7 1]);
     hold on;
     min_val = min([q_theo; q_emp]);
     max_val = max([q_theo; q_emp]);
     line([min_val, max_val], [min_val, max_val], ...
-        'Color', [0.8 0 0], 'LineStyle', '--');
-    xlabel(sprintf('Theoretical Quantiles (%s)', fam), 'FontWeight', 'bold');
-    ylabel('Sample Quantiles', 'FontWeight', 'bold');
-    title(sprintf('Variable %d', i), 'FontWeight', 'bold');
+        'Color', [0.8 0 0], 'LineStyle', '--','LineWidth',1.5);
+    xlabel(sprintf('Theoretical Quantiles (%s)', fam), 'FontWeight','bold','FontSize',14);
+    ylabel('Sample Quantiles', 'FontWeight','bold','FontSize',14);
+    title(var_names{i}, 'FontWeight','bold','FontSize',14); % 替换为真实变量名
     grid on; box on;
     
-    text_str = sprintf('KS p: %.3f', marg_fits{i}.ks_p);
+    % 修改KS检验文本格式 + 增大字体
+    text_str = sprintf('K-S test: p-value=%.3f', marg_fits{i}.ks_p);
     text(0.05, 0.95, text_str, 'Units', 'normalized', ...
-        'VerticalAlignment', 'top', 'FontSize', 8, ...
-        'BackgroundColor', 'white', 'EdgeColor', 'black');
+        'VerticalAlignment', 'top', 'FontSize', 12, ...
+        'BackgroundColor', 'white', 'EdgeColor', 'black','FontWeight','bold');
 end
-sgtitle('Marginal Distribution QQ Plots with KS Test', ...
-    'FontSize', 14, 'FontWeight', 'bold');
+sgtitle('QZ', ...
+    'FontSize', 16, 'FontWeight', 'bold');
 
 % 2. Method 1: Gaussian/t Copula Simulation
 Nsim = 1000;
 fprintf('=== Running Gaussian/t Copula 3D Simulation ===\n');
 [sim_U_gauss_t, model_info_gauss_t] = gaussian_t_copula_3d_model(Uhat, Nsim);
 fprintf('Chosen Copula Type: %s\n', model_info_gauss_t.chosen_type);
-fprintf('Gaussian Copula BIC: %.2f | t Copula BIC: %.2f\n\n', ...
-    model_info_gauss_t.BIC_Gauss, model_info_gauss_t.BIC_t);
+fprintf('Gaussian Copula AICc: %.2f | t Copula AICc: %.2f\n\n', ...
+    model_info_gauss_t.AICc_Gauss, model_info_gauss_t.AICc_t);
     
     % Calculate and display correlation matrix comparison for Method 1
     fprintf('=== Method 1 (Gaussian/t) Correlation Matrix Comparison ===\n');
@@ -212,7 +217,7 @@ fprintf('Method 2 (DTC) Correlation Error: %.6f\n', norm(Rtrue - sim_corr_gibbs,
 if norm(Rtrue - sim_corr_gauss_t, 'fro') < norm(Rtrue - sim_corr_gibbs, 'fro')
     fprintf('\nMethod 1 (Gaussian/t) better preserves the true correlation structure.\n');
 else
-    fprintf('\nMethod 2 (DTC) better preserves the true correlation structure.\n');
+    fprintf('\nMethod 2 (DTC) better preserves the correlation structure.\n');
 end
 
 % ===================== Convert Simulated Data to Original Scale =====================
@@ -322,7 +327,7 @@ function [sim_U, model_info] = gaussian_t_copula_3d_model(Uhat, Nsim)
     R_gauss = copulafit('Gaussian', Uhat);
     ll_gauss = sum(log(copulapdf('Gaussian', Uhat, R_gauss)));
     k_gauss = d*(d-1)/2;
-    BIC_Gauss = -2*ll_gauss + k_gauss*log(n);
+    AICc_Gauss = -2*ll_gauss + 2*k_gauss + 2*k_gauss*(k_gauss+1)/(n-k_gauss-1);
     try
         [R_t, nu_t] = copulafit('t', Uhat);
     catch ME
@@ -332,8 +337,8 @@ function [sim_U, model_info] = gaussian_t_copula_3d_model(Uhat, Nsim)
     end
     ll_t = sum(log(copulapdf('t', Uhat, R_t, nu_t)));
     k_t = d*(d-1)/2 + 1;
-    BIC_t = -2*ll_t + k_t*log(n);
-    if BIC_t < BIC_Gauss
+    AICc_t = -2*ll_t + 2*k_t + 2*k_t*(k_t+1)/(n-k_t-1);
+    if AICc_t < AICc_Gauss
         chosen_type = 't';
         chosen_params = struct('R', R_t, 'nu', nu_t);
     else
@@ -347,7 +352,7 @@ function [sim_U, model_info] = gaussian_t_copula_3d_model(Uhat, Nsim)
     end
     model_info = struct(...
         'R_gauss', R_gauss, 'R_t', R_t, 'nu_t', nu_t,...
-        'BIC_Gauss', BIC_Gauss, 'BIC_t', BIC_t,...
+        'AICc_Gauss', AICc_Gauss, 'AICc_t', AICc_t,...
         'chosen_type', chosen_type, 'chosen_params', chosen_params...
     );
 end
@@ -361,7 +366,7 @@ function [sim_U, model_info] = copula_gibbs_3d_model(Uhat, Nsim)
     if ~(isnumeric(Nsim) && mod(Nsim,1)==0 && Nsim>0)
         error('Nsim must be a positive integer, current value: %s', num2str(Nsim));
     end
-    corr_mat = corr(Uhat, 'type', 'Pearson');
+    corr_mat = corr(Uhat, 'type', 'Kendall');
     abs_corr = abs(corr_mat);
     abs_corr(1:d+1:end) = 0;
     pairs = [[1,2]; [1,3]; [2,3]];
@@ -426,10 +431,10 @@ function [sim_U, model_info] = copula_gibbs_3d_model(Uhat, Nsim)
     );
 end
 
-%% ===================== Helper Function 1: Pairwise Copula Fitting (BIC Selection) =====================
+%% ===================== Helper Function 1: Pairwise Copula Fitting (AICc Selection) =====================
 function [best_type, best_params] = fit_pairwise_copula(u_pair, candidate_types)
     n = size(u_pair,1);
-    best_BIC = Inf; best_type = ''; best_params = [];
+    best_AICc = Inf; best_type = ''; best_params = [];
     for t = 1:length(candidate_types)
         type = candidate_types{t};
         try
@@ -450,9 +455,10 @@ function [best_type, best_params] = fit_pairwise_copula(u_pair, candidate_types)
                     k = 1;
                     params = struct('theta', theta);
             end
-            BIC = -2*ll + k*log(n);
-            if BIC < best_BIC
-                best_BIC = BIC; best_type = type; best_params = params;
+            AIC = -2*ll + 2*k;
+            AICc = AIC + 2*k*(k+1)/(n-k-1);
+            if AICc < best_AICc
+                best_AICc = AICc; best_type = type; best_params = params;
             end
         catch ME
             warning('Fitting %s Copula failed: %s, skipping', type, ME.message);
